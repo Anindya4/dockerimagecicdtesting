@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Data Visualization Playground</title>
+  <!-- Tailwind via CDN for quick modern UI -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    /* small custom tweaks */
+    .control-card { background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); }
+    .split { display: grid; grid-template-columns: 1fr 420px; gap: 1rem; }
+    @media(max-width:880px){ .split{ grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <div class="max-w-7xl mx-auto p-6">
+    <header class="flex items-center justify-between gap-4 mb-6">
+      <div>
+        <h1 class="text-2xl font-semibold">Data Visualization Playground</h1>
+        <p class="text-slate-400 text-sm">Upload CSV → pick columns → style → save image</p>
+      </div>
+      <div class="flex gap-2 items-center">
+        <a id="download-sample" class="text-xs px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-md">Download sample CSV</a>
+        <button id="clearBtn" class="text-xs px-3 py-2 bg-rose-600 hover:bg-rose-500 rounded-md">Clear</button>
+      </div>
+    </header>
+
+    <main class="split">
+      <!-- Left: Chart area -->
+      <section class="p-4 rounded-xl control-card border border-slate-700">
+        <div class="flex items-start gap-4">
+          <div class="flex-1">
+            <div class="bg-slate-800 p-4 rounded-lg shadow-sm">
+              <canvas id="chartCanvas" height="360"></canvas>
+            </div>
+            <div class="mt-3 flex gap-2">
+              <button id="saveBtn" class="px-3 py-2 bg-emerald-600 rounded text-sm hover:bg-emerald-500">Save as Image</button>
+              <button id="exportPNGTransparent" class="px-3 py-2 bg-sky-600 rounded text-sm hover:bg-sky-500">Save (transparent)</button>
+              <button id="refreshBtn" class="px-3 py-2 bg-slate-600 rounded text-sm hover:bg-slate-500">Refresh Chart</button>
+            </div>
+            <div id="chartInfo" class="mt-3 text-slate-400 text-sm"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Controls -->
+      <aside class="p-4 rounded-xl control-card border border-slate-700">
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm text-slate-300 mb-1">Upload CSV</label>
+            <input id="csvFile" type="file" accept=".csv,text/csv" class="block w-full text-sm text-slate-200" />
+            <p class="text-xs text-slate-500 mt-1">First row should be headers. Numeric columns are detected automatically.</p>
+          </div>
+
+          <div>
+            <label class="block text-sm text-slate-300 mb-1">Chart type</label>
+            <select id="chartType" class="w-full rounded-md bg-slate-800 text-slate-200 p-2">
+              <option value="line">Line</option>
+              <option value="bar">Bar</option>
+              <option value="pie">Pie</option>
+              <option value="doughnut">Doughnut</option>
+              <option value="radar">Radar</option>
+              <option value="scatter">Scatter</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm text-slate-300 mb-1">X-axis / Labels</label>
+            <select id="xSelect" class="w-full rounded-md bg-slate-800 text-slate-200 p-2"></select>
+          </div>
+
+          <div>
+            <label class="block text-sm text-slate-300 mb-1">Y-axis (choose one or more)</label>
+            <select id="ySelect" multiple size="5" class="w-full rounded-md bg-slate-800 text-slate-200 p-2"></select>
+            <p class="text-xs text-slate-500 mt-1">Hold Ctrl/Cmd to select multiple series. For pie/doughnut pick a single numeric column.</p>
+          </div>
+
+          <div id="colorsContainer" class="space-y-2"></div>
+
+          <div class="flex gap-2">
+            <button id="updateBtn" class="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded">Update Chart</button>
+            <button id="autoColorBtn" class="px-3 py-2 bg-slate-600 hover:bg-slate-500 rounded">Auto Colors</button>
+          </div>
+
+          <div id="advanced" class="pt-2 border-t border-slate-700 text-xs text-slate-400">
+            <div class="flex items-center justify-between">
+              <span>Show points (line chart)</span>
+              <input id="showPoints" type="checkbox" checked class="ml-2" />
+            </div>
+            <div class="flex items-center justify-between mt-2">
+              <span>Fill under line</span>
+              <input id="fillArea" type="checkbox" class="ml-2" />
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-slate-700 text-xs text-slate-400">
+            <p>Tips: Use the sample CSV if you don't have data. You can export the chart as PNG. For scatter charts, choose numeric X and Y.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="mt-6 text-sm text-slate-500">Built with ❤️ • Chart.js • PapaParse • Tailwind</footer>
+  </div>
+
+<script>
+// Utility functions and app state
+let rawData = null; // array of objects
+let headers = [];
+let chart = null;
+
+const ctx = document.getElementById('chartCanvas').getContext('2d');
+const chartTypeEl = document.getElementById('chartType');
+const xSelect = document.getElementById('xSelect');
+const ySelect = document.getElementById('ySelect');
+const colorsContainer = document.getElementById('colorsContainer');
+const csvFile = document.getElementById('csvFile');
+const updateBtn = document.getElementById('updateBtn');
+const saveBtn = document.getElementById('saveBtn');
+const exportTransparentBtn = document.getElementById('exportPNGTransparent');
+const autoColorBtn = document.getElementById('autoColorBtn');
+const refreshBtn = document.getElementById('refreshBtn');
+const clearBtn = document.getElementById('clearBtn');
+const downloadSample = document.getElementById('download-sample');
+const chartInfo = document.getElementById('chartInfo');
+
+// sample CSV data
+const sampleCSV = `Category,Month,ValueA,ValueB\nA,Jan,10,30\nB,Feb,20,15\nC,Mar,15,40\nD,Apr,25,20\nE,May,30,50`;
+
+downloadSample.addEventListener('click', ()=>{
+  const blob = new Blob([sampleCSV], {type: 'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'sample.csv';
+  a.click(); URL.revokeObjectURL(url);
+});
+
+clearBtn.addEventListener('click', ()=>{ rawData=null; headers=[]; xSelect.innerHTML=''; ySelect.innerHTML=''; colorsContainer.innerHTML=''; if(chart){ chart.destroy(); chart=null;} chartInfo.textContent='Cleared.'; });
+
+csvFile.addEventListener('change', (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  Papa.parse(f, { header:true, dynamicTyping:true, skipEmptyLines:true, complete: (res)=>{
+    rawData = res.data;
+    headers = res.meta.fields || Object.keys(rawData[0] || {});
+    populateSelectors();
+    chartInfo.textContent = `Loaded ${rawData.length} rows, ${headers.length} columns.`;
+  }, error: (err)=>{ chartInfo.textContent = 'Error parsing CSV: '+err.message; }
+  });
+});
+
+function populateSelectors(){
+  xSelect.innerHTML=''; ySelect.innerHTML=''; colorsContainer.innerHTML='';
+  headers.forEach(h=>{
+    const opt1 = document.createElement('option'); opt1.value=h; opt1.textContent=h; xSelect.appendChild(opt1);
+    const opt2 = document.createElement('option'); opt2.value=h; opt2.textContent=h; ySelect.appendChild(opt2);
+  });
+}
+
+function detectNumericColumns(){
+  const numeric = new Set();
+  if(!rawData) return numeric;
+  headers.forEach(h=>{
+    for(const row of rawData){
+      const v = row[h];
+      if(v !== null && v !== undefined && v !== '' ){
+        if(typeof v === 'number') { numeric.add(h); break; }
+        // attempt parse
+        const n = Number(v);
+        if(!Number.isNaN(n)) { numeric.add(h); break; }
+      }
+    }
+  });
+  return numeric;
+}
+
+function autoColors(n){
+  const palette = ["#ef4444","#f59e0b","#f97316","#10b981","#3b82f6","#6366f1","#ec4899","#06b6d4","#f43f5e","#a78bfa"];
+  const out = [];
+  for(let i=0;i<n;i++) out.push(palette[i%palette.length]);
+  return out;
+}
+
+function buildDatasets(xKey, yKeys, type){
+  const numericCols = detectNumericColumns();
+  const labels = rawData.map(r=> r[xKey] == null ? '' : String(r[xKey]) );
+  const colors = autoColors(yKeys.length);
+  colorsContainer.innerHTML = '';
+
+  const datasets = yKeys.map((y,k)=>{
+    // create color picker
+    const wrapper = document.createElement('div'); wrapper.className='flex items-center gap-2';
+    const lbl = document.createElement('div'); lbl.textContent = y; lbl.className='flex-1 text-slate-300 text-sm';
+    const inp = document.createElement('input'); inp.type='color'; inp.value = colors[k]; inp.dataset.col=y;
+    inp.addEventListener('input', ()=>{ updateBtn.click(); });
+    wrapper.appendChild(lbl); wrapper.appendChild(inp);
+    colorsContainer.appendChild(wrapper);
+
+    let data;
+    if(type==='scatter'){
+      // scatter expects {x:..., y:...}
+      data = rawData.map(r=>({ x: Number(r[xKey]), y: Number(r[y]) }));
+    } else if(type==='pie' || type==='doughnut'){
+      data = rawData.map(r=> Number(r[y]));
+    } else {
+      data = rawData.map(r=> Number(r[y]));
+    }
+
+    return {
+      label: y,
+      data: data,
+      borderColor: colors[k],
+      backgroundColor: colors[k] + (type==='line' ? '33' : '55'),
+      tension: 0.3,
+      fill: document.getElementById('fillArea').checked,
+      showLine: true,
+      pointRadius: document.getElementById('showPoints').checked ? 3 : 0,
+    };
+  });
+  return { datasets, labels };
+}
+
+function updateChart(){
+  if(!rawData) {
+    chartInfo.textContent = 'Please upload a CSV first.'; return;
+  }
+  const type = chartTypeEl.value;
+  const xKey = xSelect.value || headers[0];
+  const selectedY = Array.from(ySelect.selectedOptions).map(o=>o.value);
+  if(selectedY.length===0){ chartInfo.textContent='Select at least one Y column.'; return; }
+
+  // For pie/doughnut allow only one Y (or aggregate)
+  let yKeys = selectedY.slice();
+  if(type==='pie' || type==='doughnut'){
+    if(yKeys.length>1) yKeys = [yKeys[0]];
+  }
+
+  const built = buildDatasets(xKey, yKeys, type);
+
+  // override colors from pickers
+  const pickers = colorsContainer.querySelectorAll('input[type=color]');
+  pickers.forEach((p,i)=>{
+    const val = p.value;
+    const ds = built.datasets[i];
+    if(ds){ ds.borderColor = val; ds.backgroundColor = (type==='line' ? val + '33' : val + '55'); }
+  });
+
+  // destroy old chart
+  if(chart) chart.destroy();
+
+  const cfg = {
+    type: (type==='scatter') ? 'scatter' : type,
+    data: {
+      labels: (type==='pie' || type==='doughnut') ? rawData.map(r=> String(r[xKey])) : built.labels,
+      datasets: built.datasets
+    },
+    options: {
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins: { legend: { position: 'top', labels: { color: '#e6eef8' } } },
+      scales: (type==='pie' || type==='doughnut') ? {} : { x: { ticks: { color: '#e6eef8' }, title: { display:false } }, y: { ticks: { color: '#e6eef8' } } }
+    }
+  };
+
+  chart = new Chart(ctx, cfg);
+  chartInfo.textContent = `Rendered ${type} chart with ${built.datasets.length} dataset(s).`;
+}
+
+updateBtn.addEventListener('click', ()=> updateChart());
+refreshBtn.addEventListener('click', ()=> { if(chart) chart.update(); });
+autoColorBtn.addEventListener('click', ()=>{
+  const pickers = colorsContainer.querySelectorAll('input[type=color]');
+  const colors = autoColors(pickers.length);
+  pickers.forEach((p,i)=> p.value = colors[i]);
+  updateBtn.click();
+});
+
+saveBtn.addEventListener('click', ()=>{
+  if(!chart){ chartInfo.textContent='No chart to save.'; return; }
+  const a = document.createElement('a');
+  const url = chart.toBase64Image();
+  a.href = url;
+  a.download = 'chart.png';
+  a.click();
+});
+
+exportTransparentBtn.addEventListener('click', ()=>{
+  if(!chart){ chartInfo.textContent='No chart to save.'; return; }
+  // temporarily set canvas background transparent
+  const canvas = chart.canvas;
+  const prevBg = canvas.style.backgroundColor;
+  canvas.style.backgroundColor = 'transparent';
+  const url = canvas.toDataURL('image/png');
+  const a = document.createElement('a'); a.href = url; a.download = 'chart_transparent.png'; a.click();
+  canvas.style.backgroundColor = prevBg;
+});
+
+// small convenience: when chart type changes, adjust UI hints
+chartTypeEl.addEventListener('change', ()=>{
+  const type = chartTypeEl.value;
+  if(type==='pie' || type==='doughnut'){
+    ySelect.multiple = false; ySelect.size = 5;
+  } else if(type==='scatter'){
+    ySelect.multiple = true; ySelect.size = 5;
+  } else {
+    ySelect.multiple = true; ySelect.size = 5;
+  }
+});
+
+// pre-load sample data so user can play quickly
+(function loadSample(){
+  Papa.parse(sampleCSV, { header:true, dynamicTyping:true, skipEmptyLines:true, complete: (res)=>{
+    rawData = res.data; headers = res.meta.fields; populateSelectors(); chartInfo.textContent = 'Sample data loaded.'; updateChart(); } });
+})();
+
+</script>
+</body>
+</html>
